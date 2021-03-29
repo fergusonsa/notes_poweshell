@@ -2,14 +2,14 @@
 $VerbosePreference = "Continue"
 
 if (-Not $NOTES_FILES_DIRECTORY) {
-    New-Variable -Name 'NOTES_FILES_DIRECTORY' -Value 'C:\Users\tgf218\Documents\notes' -Option Constant
+    New-Variable -Name 'NOTES_FILES_DIRECTORY' -Value "$($HOME)\Documents\notes" -Option Constant
 }
 if (-Not (Test-Path $NOTES_FILES_DIRECTORY -PathType Container)) {
     New-Item -Path $NOTES_FILES_DIRECTORY -ItemType Directory
 } 
 
 if (-Not $REPORTS_DIRECTORY) {
-    New-Variable -Name 'REPORTS_DIRECTORY' -Value 'C:\Users\tgf218\Documents\reports' -Option Constant
+    New-Variable -Name 'REPORTS_DIRECTORY' -Value "$($HOME)\Documents\reports" -Option Constant
 }
 if (-Not (Test-Path $REPORTS_DIRECTORY -PathType Container)) {
     New-Item -Path $REPORTS_DIRECTORY -ItemType Directory
@@ -35,7 +35,7 @@ function Start-RequiredApplications{
     process {
         # Check for required applications running
         $AppExecutables = @{'notepad++' = 'C:\Program Files (x86)\Don_Ho_Notepad++_760\notepad++.exe'; # Notepad++
-                            'Teams' = 'C:\Users\tgf218\AppData\Local\Microsoft\Teams\Update.exe --processStart "Teams.exe"' # MS Teams
+                            'Teams' = "$($HOME)\AppData\Local\Microsoft\Teams\Update.exe --processStart 'Teams.exe'" # MS Teams
                             }
 
         foreach ($process_name in $AppExecutables.Keys) {
@@ -475,5 +475,3 @@ function Get-InternetExplorerHistory {
         }
     }
 }
-
-
