@@ -15,6 +15,10 @@ if (-Not (Test-Path $REPORTS_DIRECTORY -PathType Container)) {
     New-Item -Path $REPORTS_DIRECTORY -ItemType Directory
 } 
 
+if (-Not $TASK_NOTE_TEMPLATE) {
+    New-Variable -Name 'TASK_NOTE_TEMPLATE' -Value "[ ] {0}   {1}   {2}" -Option Constant
+}
+
 function Setup-TranscriptLogging {
    [CmdletBinding()]
     param (
@@ -35,6 +39,9 @@ function Start-RequiredApplications{
     process {
         # Check for required applications running
         $AppExecutables = @{'notepad++' = 'C:\Program Files (x86)\Don_Ho_Notepad++_760\notepad++.exe'; # Notepad++
+                            'firefox' = "C:\Program Files\Mozilla Firefox\firefox.exe"; # Firefox
+                            'eclipse' = "C:\APPS\Eclipse IDE 2018-09\eclipse.exe"; # Eclipse
+                            'bash' = "C:\Program Files (x86)\Git\bin\sh.exe"; # Git-bash
                             'Teams' = "$($HOME)\AppData\Local\Microsoft\Teams\Update.exe --processStart 'Teams.exe'" # MS Teams
                             }
 
@@ -105,7 +112,7 @@ function Start-Day {
 
         Start-RequiredApplications
         Check-VPN
-
+        copy-Tasks -destinationDate $Date -sourceDate (Find-PreviousDayWithNotes -Date $Date)
 
         $FilePath
     }
@@ -255,6 +262,28 @@ function Get-NotesFilePathForDate {
     }
 }
 
+function Find-PreviousDayWithNotes {
+   [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $false,
+                   ValueFromPipelineByPropertyName = $true,
+                   Position = 0)]
+        [datetime]$Date=(get-date)
+    )
+    process {
+        $previousDate = $Date
+        $START_DATE =  [datetime] "2020-10-17"
+        do {
+            $previousDate = $previousDate.AddDays(-1)
+        } until ($previousDate -lt $START_DATE -or ((Get-NotesFilePathForDate -Date $previousDate) -and (Test-path -Path (Get-NotesFilePathForDate -Date $previousDate) -PathType Leaf)))
+        if ($previousDate -lt $START_DATE) {
+            return $null
+        } else {
+            return $previousDate
+        }
+    }
+}
+
 function Get-DayEntries {
     [CmdletBinding()]
     param (
@@ -278,18 +307,26 @@ function Get-DayEntries {
                 } else {
                     $matches = $line | Select-String -Pattern $timestampLinePattern
                     $timestampString = $matches.Matches[0].Groups['timestamp'].Value
-                    $line_content = $matches.Matches[0].Groups['line'].Value
-           
-                    if ($timestampString) {
-                        $last_timestamp = [datetime] $timestampString
-                        $entries[$last_timestamp] = @($line_content)
+                    $line_content = $matches.Matches[0].Groups['line'].Value.TrimEnd()
+                    # If there is a timestamp in the line and there is not already an entry with that timestamp as key
+                    if ($timestampString -and (-not($last_timestamp) -or -not($entries.ContainsKey([datetime] $timestampString)))) {
+                        try {
+                            $last_timestamp = [datetime] $timestampString
+                            $entries[$last_timestamp] = @($line_content)
+                        } catch [Exception] {
+                            Write-Warning "Unable to insert new entry with timestampString $timestampString '$line' - $($_.Exception)"
+                        }
                     } else {                
-                        $entries[$last_timestamp]  += $line_content
-                        # Write-Verbose -Message "Added to existing entry '$line_content'"
+                        try {
+                            $entries[$last_timestamp]  += $line_content
+                            # Write-Verbose -Message "Added to existing entry '$line_content'"
+                        } catch [Exception] {
+                            Write-Warning "Unable to insert new line to existing entry with last_timestamp $last_timestamp '$line' - $($_.Exception)"
+                        }
                     }
                 }
-            } catch {
-                Write-Warning "Unable to parse the line '$line'"
+            } catch [Exception] {
+                Write-Warning "Unable to parse the line '$line' - $($_.Exception)"
             }
         }
 
@@ -474,4 +511,129 @@ function Get-InternetExplorerHistory {
             }
         }
     }
+}
+
+
+function Add-Task {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory= $true, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [String] $taskDescription, 
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 1)]
+        [datetime] $date = (get-date), 
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 2)]
+        [datetime] $dueDate, 
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 3)]
+        [String] $priority
+    )
+    process {
+        if ($priority) {
+            $priority = "Priority: $($priority)"
+        } else {
+            $priority = ""
+        }
+        if ($dueDate) {
+            $dueDateString = "Due: $($dueDate.ToShortDateString())"
+        } else {
+            $dueDateString = ""
+        }
+        Add-Note -Date $date -Note ($TASK_NOTE_TEMPLATE -f $taskDescription.Replace("[ ] ", ""), $dueDateString, $priority)
+    }
+}
+
+function Get-Tasks {
+   [CmdletBinding()]
+    param (
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [datetime] $date = (Get-Date),
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 1)]
+        [Switch] $completed = $false
+    )
+    process {
+        $FilePath = Get-NotesFilePathForDate -Date $date
+        if ($FilePath) {
+            $entries = Get-DayEntries -FilePath $FilePath 
+            if ($completed) {
+                @($entries.Values | ForEach-Object {$_}) | Where-Object { $_.startsWith("[x] ") }
+            } else {
+                @($entries.Values | ForEach-Object {$_}) | Where-Object { $_.startsWith("[ ] ") }
+            }
+        } else {
+            Write-Verbose -Message "Cannot find file for date $($date)"
+            @()
+        }
+    }
+}
+
+function copy-Tasks {
+  [CmdletBinding()]
+    param (
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [datetime] $destinationDate = (Get-Date),
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [datetime] $sourceDate = (Find-PreviousDayWithNotes -Date $destinationDate)
+    )
+    process {
+        $sourceFilePath = Get-NotesFilePathForDate -Date $sourceDate
+        $destinationFilePath = Get-NotesFilePathForDate -Date $destinationDate
+        if ($sourceFilePath -eq $destinationFilePath) {
+            Write-Verbose -Message "Could not copy tasks from file $($sourceFilePath) for date $($sourceDate) to file $($destinationFilePath) for date $($destinationDate) as the files are the same!"
+            return
+        }
+        $tasks = Get-Tasks -date $sourceDate
+        if ($tasks.count -eq 0 ) {
+            Write-Verbose -Message "No tasks found for $($sourceDate)"
+        } else {
+            Write-Verbose -Message "Copying $($tasks.count) tasks from file $($sourceFilePath) for date $($sourceDate) to file $($destinationFilePath) for date $($destinationDate)"
+            $tasks | foreach-object { Add-Task -Date $destinationDate -taskDescription $_ }
+        }
+    }
+}
+
+function show-tasks {
+  [CmdletBinding()]
+    param (
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [datetime] $date = (Get-Date),
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 1)]
+        [Switch] $completedOnly = $false
+    )
+    process {
+        $tasks = Get-Tasks -date $date -completed:$completedOnly
+        if ($tasks.count -eq 0 ) {
+            Write-Verbose -Message "No tasks found for $($date)"
+        } else {
+            # Should sort based on priority
+            for($i=0; $i -lt $tasks.Count; $i++) {
+                if ($tasks[$i]) {
+                    Write-host "#$($i+1)  $($tasks[$i])" 
+                }
+            }
+        }
+    }
+}
+
+function set-taskCompleted {
+  [CmdletBinding()]
+    param (
+        [Parameter(Mandatory= $false, ValueFromPipelineByPropertyName = $true, Position = 0)]
+        [datetime] $date = (Get-Date),
+        [Parameter(Mandatory= $true, ValueFromPipelineByPropertyName = $true, Position = 1)]
+        [int] $taskNumber
+    )
+    process {
+        $tasks = Get-Tasks -date $date
+        if ($tasks.count -eq 0 ) {
+            Write-Verbose -Message "No tasks found for $($date)"
+        } elseif ($taskNumber -le 0 -or $taskNumber -gt $tasks.Count) {
+            Write-Warning -Message "Task number, $taskNumber, must be between 1 and $($tasks.Count), the number of tasks present."
+        } else {
+            $filePath = Get-NotesFilePathForDate -Date $date
+            $lineToUpdate = $tasks[$taskNumber-1]
+            $newLineToUpdate = $lineToUpdate.replace("[ ]", "[x]")
+            Write-Verbose -Message "Going to change line with '$lineToUpdate' to '$newLineToUpdate' in file $filePath"
+            ((Get-Content -path $filePath -Raw).replace($lineToUpdate, $newLineToUpdate)) | Set-Content -Path $filePath
+        }
+    }
+
 }
